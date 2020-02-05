@@ -5,6 +5,10 @@ from mk_celery import make_celery
 from celery.result import AsyncResult
 from celery import group
 from celery.result import GroupResult
+from urllib.request import urlopen
+from PyPDF2 import PdfFileReader
+from pdf2image import convert_from_path
+
 
 app = Flask(__name__)
 app.config['CELERY_BROKER_URL'] = 'redis://localhost:1234'
@@ -28,6 +32,8 @@ def get_childs(group_id):
     return {
         'Childs':res.as_tuple()[1],
     }
+
+
   
 
 
@@ -42,8 +48,54 @@ def calc(num1,num2):
     # time.sleep(60)
     return value
 
+@app.route('/check_status/<group_id>')
+def check_status(group_id):
+    res = GroupResult.restore(group_id, app=celery)
+    return {
+        'Childs':res.successful(),
+    }
+@app.route('/check_child_result/<task_id>')
+def check_child_result(task_id):
+    res = AsyncResult(task_id, app=celery)
+    return jsonify(res.get())
 
 
+@app.route('/get_pdf/<file_pdf_url>')
+def get_pdf(file_pdf_url):
+    group = save_file_pdf(1,'http://www.africau.edu/images/default/sample.pdf')
+
+    return 'Success with Group ID : {}'.format(group.id)
+
+
+
+@celery.task(name='flask_celery.save_file_pdf')
+def save_file_pdf(file_id,file_url):
+    response = urlopen(file_url)
+    result = response.read()
+    file_name = "{}.pdf".format(file_id)
+    f = open(file_name, "ab")
+    f.write(result)
+    f.close()
+    pdf = PdfFileReader(open(file_name,'rb'))
+    total_pages = pdf.getNumPages()
+    
+    gro = group([task_to_ocr.s(file_name,x) for x in range(total_pages)])
+    result = gro()
+    result.save()
+
+    return result
+
+
+@celery.task(name='flask_celery.task_to_ocr')
+def task_to_ocr(file_name,page_num):
+    images = convert_from_path(file_name, last_page=int(page_num), first_page=int(page_num))
+
+    width,height = 0,0
+    for i, image in enumerate(images):
+        fname = "test_pdf/image" + str(i) + ".png"
+        width,height = image.size
+    
+    return [width,height]
 
 if __name__ == '__main__':
     app.run()
